@@ -5,10 +5,11 @@ import { targetPool, controlPool } from './db.js';
 import { operationType } from './classifier.js';
 
 const agentApp = express();
+agentApp.use(cors({origin : process.env.DASHBOARD_ORIGIN || 'http://localhost:5173'}))
 agentApp.use(express.json());
 
 const adminApp = express();
-adminApp.use(cors());
+adminApp.use(cors({origin : process.env.DASHBOARD_ORIGIN || 'http://localhost:5173'}));
 adminApp.use(express.json());
 
 const ADMIN_SECRET = process.env.ADMIN_SECRET;
