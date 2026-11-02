@@ -3,6 +3,12 @@ import express from 'express';
 import cors from 'cors';
 import { targetPool, controlPool } from './db.js';
 import { operationType } from './classifier.js';
+import crypto from 'crypto';
+
+const safetyConfig = {
+    maxAutoUpdateRows: parseInt(process.env.MAX_AUTO_UPDATE_ROWS || '2', 10),
+    maxAutoDeleteRows: parseInt(process.env.MAX_AUTO_DELETE_ROWS || '1', 10),
+};
 
 const agentApp = express();
 agentApp.use(cors({origin : process.env.DASHBOARD_ORIGIN || 'http://localhost:5173'}))
@@ -26,7 +32,11 @@ agentApp.post('/api/query', async (req, res) => {
         const type = await operationType(query);
         
         if(type === "UNKNOWN"){
-            return res.status(400).json({message : "Invalid or strictly blocked query structure detected."})
+            await controlPool.query(
+                `INSERT INTO audit_logs(query, query_type, status, affected_rows) VALUES ($1, $2, $3, $4)`,
+        [query, 'UNKNOWN', 'REJECTED', null]
+            )
+            return res.status(400).json({success : false, error : "Invalid or strictly blocked query structure detected."})
         }
         if (type === "SELECT") {
             const client = await targetPool.connect();
@@ -56,8 +66,8 @@ agentApp.post('/api/query', async (req, res) => {
         try {
             await client.query('BEGIN');
             const result = await client.query(query);
-            blastRadius = result.rowCount || 0;
-            if ((type === "UPDATE" && blastRadius <= 2) || (type === "DELETE" && blastRadius === 1)){
+            blastRadius = result.rowCount !== null ? result.rowCount : null;
+            if ((type === "UPDATE" && blastRadius <= safetyConfig.maxAutoUpdateRows) || (type === "DELETE" && blastRadius === safetyConfig.maxAutoDeleteRows)){
                 await client.query('COMMIT');
                 await controlPool.query(
                 `INSERT INTO audit_logs(query, query_type, status, affected_rows) VALUES ($1, $2, $3, $4)`,
@@ -96,11 +106,23 @@ agentApp.post('/api/query', async (req, res) => {
 
 adminApp.use((req, res, next) => {
     const token = req.headers['x-admin-token'];
-   
-    if (token !== ADMIN_SECRET) {
-        return res.status(401).json({ success: false, error: "Unauthorized. Admin access only." });
+    const secret = process.env.ADMIN_SECRET;
+
+    if (!token || typeof token !== 'string' || !secret) {
+        return res.status(401).json({ success: false, error: "Unauthorized access" });
     }
-    next();
+
+    try {
+        const tokenHash = crypto.createHash('sha256').update(token).digest();
+        const secretHash = crypto.createHash('sha256').update(secret).digest();
+
+        if (!crypto.timingSafeEqual(tokenHash, secretHash)) {
+            return res.status(401).json({ success: false, error: "Unauthorized access" });
+        }
+        next();
+    } catch (error) {
+        return res.status(500).json({ success: false, error: "Authentication processing error" });
+    }
 });
 
 adminApp.get('/api/audit-logs', async (req, res) => {
@@ -137,12 +159,12 @@ adminApp.post('/api/approve/:id', async (req, res) => {
             await client.query('BEGIN');
             const executeQuery = await client.query(targetQuery);
             
-            if (executeQuery.rowCount !== originalBlastRadius) {
+            if (originalBlastRadius !== null && executeQuery.rowCount !== originalBlastRadius) {
                 await client.query('ROLLBACK');
                 await controlPool.query(
                     `UPDATE audit_logs SET status = 'REJECTED_STATE_CHANGE' WHERE id = $1`, [id]
                 );
-                return res.status(409).json({ success: false, message: 'Blast radius mismatch! Database state changed.' });
+                return res.status(409).json({ success: false, error: 'Blast radius mismatch! Database state changed.' });
             } else {
                 await client.query('COMMIT'); 
                 
@@ -169,7 +191,7 @@ adminApp.post('/api/approve/:id', async (req, res) => {
     } catch (error) {
 
         console.error("Error during execution:", error);
-        res.status(500).json({ success: false, message: "Could not execute the Approved Query" });
+        res.status(500).json({ success: false, error: "Could not execute the Approved Query" });
     }
 });
 
@@ -189,13 +211,25 @@ catch (error) {
     }
 })
 
-const AGENT_PORT = process.env.PORT || 8000;
-const ADMIN_PORT = process.env.ADMIN_PORT || 8001;
+const cleanupStaleQueries = async () => {
+    try {
+        const result = await controlPool.query(
+            `UPDATE audit_logs SET status = 'FAILED_EXECUTION' WHERE status = 'EXECUTING'`
+        );
+        if (result.rowCount && result.rowCount > 0) {
+            console.log(`🧹 Cleaned up ${result.rowCount} stuck queries from previous crash.`);
+        }
+    } catch (error) {
+        console.error('Failed to run startup cleanup routine:', error);
+    }
+};
 
-agentApp.listen(Number(AGENT_PORT), () => {
-    console.log(`🤖 Agent Plane running on port ${AGENT_PORT}`);
-});
+cleanupStaleQueries().then(() => {
+    agentApp.listen(Number(process.env.PORT || 8000), () => {
+        console.log(`🤖 Agent Plane running on port ${process.env.PORT || 8000}`);
+    });
 
-adminApp.listen(Number(ADMIN_PORT), '127.0.0.1', () => {
-    console.log(`🛡️  Admin Control Plane running on http://127.0.0.1:${ADMIN_PORT}`);
+    adminApp.listen(Number(process.env.ADMIN_PORT || 8001), '127.0.0.1', () => {
+        console.log(`🛡️ Admin Control Plane running on http://127.0.0.1:${process.env.ADMIN_PORT || 8001}`);
+    });
 });

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+
 interface AuditLog {
   id: number;
   query: string;
@@ -7,15 +8,18 @@ interface AuditLog {
   affected_rows: number;
   created_at: string;
 }
-const adminToken = import.meta.env.VITE_ADMIN_SECRET
+
+const adminToken = import.meta.env.VITE_ADMIN_SECRET;
+
 export default function App() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState('');
+
+  const [notification, setNotification] = useState<{type: 'success' | 'error', text: string} | null>(null);
 
   const fetchLogs = async () => {
     try {
-      const res = await fetch('http://localhost:8001/api/audit-logs',{
+      const res = await fetch('http://localhost:8001/api/audit-logs', {
         headers: {
           'x-admin-token': adminToken,
           'Content-Type': 'application/json'
@@ -28,6 +32,7 @@ export default function App() {
       }
     } catch (err) {
       console.error("Failed to fetch logs", err);
+      setNotification({ type: 'error', text: "Failed to connect to the Admin Control Plane (Server is down or unreachable)." });
     } finally {
       setLoading(false);
     }
@@ -42,43 +47,64 @@ export default function App() {
       const res = await fetch(`http://localhost:8001/api/approve/${id}`, {
         method: 'POST',
         headers: {
-    'x-admin-token': adminToken, 
-    'Content-Type': 'application/json'
-  }
+          'x-admin-token': adminToken, 
+          'Content-Type': 'application/json'
+        }
       });
       const data = await res.json();
+
       if (data.success) {
-        setMessage(`Success: ${data.message}`);
+        setNotification({ type: 'success', text: "Query approved successfully!" });
         fetchLogs(); 
       } else {
-        setMessage(`Error: ${data.error}`);
+        setNotification({ type: 'error', text: data.error || "Something went wrong" });
       }
     } catch (err) {
       console.error("Approval failed", err);
+      setNotification({ type: 'error', text: "Network error during approval" });
     }
   };
 
-  const handleReject = async(id : number) => {
-    try{
-      const res = await fetch(`http://localhost:8001/api/reject/${id}`,{
-        method : 'POST',
-        headers : {
-          'x-admin-token' : adminToken,
-          'Content-Type' : 'application/json'
+  const handleReject = async (id: number) => {
+    try {
+      const res = await fetch(`http://localhost:8001/api/reject/${id}`, {
+        method: 'POST',
+        headers: {
+          'x-admin-token': adminToken,
+          'Content-Type': 'application/json'
         }
-      })
+      });
       const data = await res.json();
+
       if (data.success) {
-        setMessage(`Success: ${data.message}`);
+        setNotification({ type: 'success', text: "Query rejected successfully!" }); // Fixed message text here too
         fetchLogs(); 
       } else {
-        setMessage(`Error: ${data.error}`);
+        setNotification({ type: 'error', text: data.error || "Something went wrong" });
       }
     } catch (err) {
       console.error("Rejection failed", err);
+      setNotification({ type: 'error', text: "Network error during rejection" });
     }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'EXECUTED':
+      case 'AUTO_EXECUTED':
+        return 'bg-emerald-950 text-emerald-400 border border-emerald-800';
+      case 'PENDING':
+      case 'EXECUTING':
+        return 'bg-yellow-950 text-yellow-400 border border-yellow-800';
+      case 'REJECTED':
+      case 'REJECTED_STATE_CHANGE':
+      case 'FAILED_EXECUTION':
+      case 'STALE':
+        return 'bg-rose-950 text-rose-400 border border-rose-800';
+      default:
+        return 'bg-gray-800 text-gray-400 border border-gray-700';
     }
-  
+  };
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-8">
@@ -96,9 +122,13 @@ export default function App() {
           </button>
         </header>
 
-        {message && (
-          <div className="mb-6 p-4 bg-emerald-950/50 border border-emerald-800 text-emerald-300 rounded-lg text-sm">
-            {message}
+        {notification && (
+          <div className={`mb-6 p-4 border rounded-lg text-sm ${
+            notification.type === 'error' 
+              ? 'bg-rose-950/50 border-rose-800 text-rose-300' 
+              : 'bg-emerald-950/50 border-emerald-800 text-emerald-300'
+          }`}>
+            {notification.text}
           </div>
         )}
 
@@ -138,36 +168,33 @@ export default function App() {
                         </span>
                       </td>
                       <td className="p-4 font-mono text-xs text-gray-300 max-w-md whitespace-pre-wrap break-all">{log.query}</td>
-                      <td className="p-4 font-mono text-xs text-gray-300">{log.affected_rows} rows</td>
+                      <td className="p-4 font-mono text-xs text-gray-300">{log.affected_rows !== null ? `${log.affected_rows} rows` : 'DDL (Schema)'}</td>
                       <td className="p-4 text-xs">
-                        <span className={`px-2 py-1 rounded-full font-medium text-[10px] ${
-                          log.status === 'PENDING' ? 'bg-yellow-950 text-yellow-400 border border-yellow-800' :
-                          log.status === 'AUTO_EXECUTED' ? 'bg-blue-950 text-blue-400 border border-blue-800' :
-                          'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                        }`}>
+                        
+                        <span className={`px-2 py-1 rounded-full font-medium text-[10px] ${getStatusColor(log.status)}`}>
                           {log.status}
                         </span>
                       </td>
                       <td className="p-4 text-right">
-                     {log.status === 'PENDING' ? (
-                     <div className="flex justify-end gap-2"> {/* Added flex and gap for spacing */}
-                     <button
-                     onClick={() => handleApprove(log.id)}
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded text-xs font-medium transition shadow-sm"
-                   >
-                  Approve
-                   </button>
-                   <button
-                   onClick={() => handleReject(log.id)}
-                    className="bg-rose-600 hover:bg-rose-500 text-white px-3 py-1.5 rounded text-xs font-medium transition shadow-sm"
-                  >
-                  Reject
-                  </button>
-                  </div>
-               ) : (
-             <span className="text-gray-600 text-xs font-medium">N/A</span>
-            )}
-                </td>
+                        {log.status === 'PENDING' ? (
+                          <div className="flex justify-end gap-2">
+                            <button
+                              onClick={() => handleApprove(log.id)}
+                              className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded text-xs font-medium transition shadow-sm"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => handleReject(log.id)}
+                              className="bg-rose-600 hover:bg-rose-500 text-white px-3 py-1.5 rounded text-xs font-medium transition shadow-sm"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-gray-600 text-xs font-medium">N/A</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
