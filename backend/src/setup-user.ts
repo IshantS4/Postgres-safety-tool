@@ -15,7 +15,9 @@ async function setupRestrictedUser() {
     try {
         console.log("🛠️ Creating restricted 'ai_agent' user...");
 
-        await client.query(`CREATE USER ai_agent WITH PASSWORD 'agent_secure_pass_123';`);
+        const agentPassword = process.env.AGENT_DB_PASSWORD;
+        if (!agentPassword) throw new Error('AGENT_DB_PASSWORD is not set in .env');
+        await client.query(`CREATE USER ai_agent WITH PASSWORD '${agentPassword.replace(/'/g, "''")}';`);
      
         await client.query(`REVOKE ALL ON SCHEMA public FROM ai_agent;`);
        
