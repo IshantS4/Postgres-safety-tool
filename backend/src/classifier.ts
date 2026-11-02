@@ -1,24 +1,36 @@
 import { parse } from "pgsql-parser" 
-export type QueryType = "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "DDL" | "UNKNOWN"
+export type QueryType = "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "DDL" | "UNKNOWN" | "WRITE_CTE"
 export async function operationType (query : string) : Promise<QueryType> {
     if(!query || typeof query !== "string"){
         return "UNKNOWN"
     }
 try{
     const ast = (await parse(query)) as any
-    if (!ast || !ast.stmts || ast.stmts.length === 0) {
+    if (!ast ||  ast.length === 0) {
         return 'UNKNOWN';
     }
-    if(ast.stmts.length > 1){
+    if(ast.length > 1){
         return 'UNKNOWN'
     }
+
     const stmt = ast.stmts[0].stmt;
     if(!stmt){
         return 'UNKNOWN'
     }
     if(stmt.SelectStmt){
-        if(stmt.SelectStmt.withClause){
-            return 'UPDATE'
+        const selectNode = stmt.SelectStmt
+        if(selectNode.intoClause){
+           return 'DDL' 
+        }
+        if(selectNode.withClause?.ctes){
+            for(const cte of selectNode.withClause.ctes){
+            const cteQuery = cte.CommonTableExpr?.ctequery;
+            if(cteQuery){
+                if(cteQuery.InsertStmt || cteQuery.UpdateStmt || cteQuery.DeleteStmt){
+                    return 'WRITE_CTE'
+                }
+            }
+            }
         }
         return 'SELECT'
     }
@@ -31,13 +43,13 @@ try{
     if(stmt.DeleteStmt){
         return 'DELETE'
     }
-    if(stmt.DropStmt || stmt.AlterTableStmt){
+    if(stmt.DropStmt || stmt.AlterTableStmt || stmt.CreateStmt || stmt.TruncateStmt){
         return 'DDL'
     }
+    return 'UNKNOWN'
 }
 catch(error){
     console.error("PARSER ERROR:", error)
     return 'UNKNOWN'
 }
-return 'UNKNOWN'
 }

@@ -11,7 +11,13 @@ const adminApp = express();
 adminApp.use(cors());
 adminApp.use(express.json());
 
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'secret-dashboard-key';
+const ADMIN_SECRET = process.env.ADMIN_SECRET;
+
+if(!ADMIN_SECRET || ADMIN_SECRET.length < 16){
+    console.error("🚨 FATAL ERROR: ADMIN_SECRET is missing or shorter than 16 characters.");
+    console.error("Please set a strong ADMIN_SECRET in your backend .env file.");
+    process.exit(1);
+}
 
 agentApp.post('/api/query', async (req, res) => {
     try {
@@ -22,8 +28,25 @@ agentApp.post('/api/query', async (req, res) => {
             return res.status(400).json({message : "Invalid or strictly blocked query structure detected."})
         }
         if (type === "SELECT") {
-            const result = await targetPool.query(query);
-            return res.json({ success: true, type, rows: result.rows });
+            const client = await targetPool.connect();
+            try{
+            await client.query('BEGIN READ ONLY');
+            await client.query("SET LOCAL statement_timeout = '5000'");
+            const result = await client.query(query);
+            await client.query('ROLLBACK');
+            return res.json({success : true, type, rows : result.rows});
+            }
+            catch(dbError){
+                await client.query('ROLLBACK');
+                console.error("SELECT execution error:", dbError);
+                 return res.status(403).json({ 
+                success: false, 
+                error: "Blocked! Read-Only violation or query timeout." 
+        });
+            }
+            finally{
+                client.release();
+            }
         }
 
         const client = await targetPool.connect();
@@ -33,26 +56,20 @@ agentApp.post('/api/query', async (req, res) => {
             await client.query('BEGIN');
             const result = await client.query(query);
             blastRadius = result.rowCount || 0;
-            await client.query('ROLLBACK');
-        } catch (dbError) {
-            await client.query('ROLLBACK');
-            throw dbError; 
-        } finally {
-            client.release(); 
-        }
-
-        if ((type === "UPDATE" && blastRadius <= 2) || (type === "DELETE" && blastRadius === 1)) {
-            const autoExec = await targetPool.query(query);
-            await controlPool.query(
+            if ((type === "UPDATE" && blastRadius <= 2) || (type === "DELETE" && blastRadius === 1)){
+                await client.query('COMMIT');
+                await controlPool.query(
                 `INSERT INTO audit_logs(query, query_type, status, affected_rows) VALUES ($1, $2, $3, $4)`,
                 [query, type, 'AUTO_EXECUTED', blastRadius]
             );
             return res.json({ 
                 success: true, 
                 message: "Auto-approved and executed by Rules Engine (Low Risk)", 
-                rows: autoExec.rows 
+                rows: result.rows 
             });
-        } else {
+            }
+            else {
+            await client.query('ROLLBACK');
             await controlPool.query(
                 `INSERT INTO audit_logs(query, query_type, status, affected_rows) VALUES ($1, $2, $3, $4)`,
                 [query, type, 'PENDING', blastRadius]
@@ -63,6 +80,13 @@ agentApp.post('/api/query', async (req, res) => {
                 error: "Blocked by Safety Guard! Destructive operations require approval." 
             });
         }
+        } catch (dbError) {
+            await client.query('ROLLBACK');
+            throw dbError; 
+        } finally {
+            client.release(); 
+        }
+ 
     } catch (error) {
         console.error("Error occurred in agent query:", error);
         res.status(500).json({ error: "Could not perform the query" });
@@ -96,7 +120,7 @@ adminApp.post('/api/approve/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const logResults = await controlPool.query(
-            `SELECT * FROM audit_logs WHERE id = $1 AND status = 'PENDING'`, [id]
+            `UPDATE audit_logs SET status = 'EXECUTING' WHERE id = $1 AND status = 'PENDING' RETURNING *`,[id]
         );
         
         if (logResults.rows.length === 0) {
@@ -133,6 +157,9 @@ adminApp.post('/api/approve/:id', async (req, res) => {
             }
         } catch (dbError) {
             await client.query('ROLLBACK');
+            await controlPool.query(
+        `UPDATE audit_logs SET status = 'FAILED_EXECUTION' WHERE id = $1`, [id]
+         );
             throw dbError; 
         } finally {
             client.release();
@@ -149,7 +176,7 @@ adminApp.post('/api/reject/:id',async(req,res) => {
 const {id} = req.params
 try{
     const result = await controlPool.query(
-        `UPDATE audit_logs SET status = 'REJECTED' WHERE id = $1 RETURNING *`,[id]
+        `UPDATE audit_logs SET status = 'REJECTED' WHERE id = $1 AND status = 'PENDING' RETURNING *`,[id]
     )
     if (result.rows.length === 0) {
             return res.status(404).json({ success: false, error: "Audit log not found." });
