@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-
 interface AuditLog {
   id: number;
   query: string;
@@ -8,7 +7,7 @@ interface AuditLog {
   affected_rows: number;
   created_at: string;
 }
-
+const adminToken = import.meta.env.VITE_ADMIN_SECRET
 export default function App() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -16,7 +15,13 @@ export default function App() {
 
   const fetchLogs = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/audit-logs');
+      const res = await fetch('http://localhost:8001/api/audit-logs',{
+        headers: {
+          'x-admin-token': adminToken,
+          'Content-Type': 'application/json'
+        }
+      });
+      
       const data = await res.json();
       if (data.success) {
         setLogs(data.auditLogs);
@@ -34,13 +39,17 @@ export default function App() {
 
   const handleApprove = async (id: number) => {
     try {
-      const res = await fetch(`http://localhost:8000/api/approve/${id}`, {
+      const res = await fetch(`http://localhost:8001/api/approve/${id}`, {
         method: 'POST',
+        headers: {
+    'x-admin-token': adminToken, 
+    'Content-Type': 'application/json'
+  }
       });
       const data = await res.json();
       if (data.success) {
         setMessage(`Success: ${data.message}`);
-        fetchLogs(); // Refresh logs after approval
+        fetchLogs(); 
       } else {
         setMessage(`Error: ${data.error}`);
       }
@@ -48,6 +57,28 @@ export default function App() {
       console.error("Approval failed", err);
     }
   };
+
+  const handleReject = async(id : number) => {
+    try{
+      const res = await fetch(`http://localhost:8001/api/reject/${id}`,{
+        method : 'POST',
+        headers : {
+          'x-admin-token' : adminToken,
+          'Content-Type' : 'application/json'
+        }
+      })
+      const data = await res.json();
+      if (data.success) {
+        setMessage(`Success: ${data.message}`);
+        fetchLogs(); 
+      } else {
+        setMessage(`Error: ${data.error}`);
+      }
+    } catch (err) {
+      console.error("Rejection failed", err);
+    }
+    }
+  
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-8">
@@ -106,7 +137,7 @@ export default function App() {
                           {log.query_type}
                         </span>
                       </td>
-                      <td className="p-4 font-mono text-xs text-gray-300 max-w-md truncate">{log.query}</td>
+                      <td className="p-4 font-mono text-xs text-gray-300 max-w-md whitespace-pre-wrap break-all">{log.query}</td>
                       <td className="p-4 font-mono text-xs text-gray-300">{log.affected_rows} rows</td>
                       <td className="p-4 text-xs">
                         <span className={`px-2 py-1 rounded-full font-medium text-[10px] ${
@@ -118,17 +149,25 @@ export default function App() {
                         </span>
                       </td>
                       <td className="p-4 text-right">
-                        {log.status === 'PENDING' ? (
-                          <button
-                            onClick={() => handleApprove(log.id)}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded text-xs font-medium transition shadow-sm"
-                          >
-                            Approve
-                          </button>
-                        ) : (
-                          <span className="text-gray-600 text-xs font-medium">N/A</span>
-                        )}
-                      </td>
+                     {log.status === 'PENDING' ? (
+                     <div className="flex justify-end gap-2"> {/* Added flex and gap for spacing */}
+                     <button
+                     onClick={() => handleApprove(log.id)}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded text-xs font-medium transition shadow-sm"
+                   >
+                  Approve
+                   </button>
+                   <button
+                   onClick={() => handleReject(log.id)}
+                    className="bg-rose-600 hover:bg-rose-500 text-white px-3 py-1.5 rounded text-xs font-medium transition shadow-sm"
+                  >
+                  Reject
+                  </button>
+                  </div>
+               ) : (
+             <span className="text-gray-600 text-xs font-medium">N/A</span>
+            )}
+                </td>
                     </tr>
                   ))}
                 </tbody>

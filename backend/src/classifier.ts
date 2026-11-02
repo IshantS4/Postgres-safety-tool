@@ -1,24 +1,43 @@
+import { parse } from "pgsql-parser" 
 export type QueryType = "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "DDL" | "UNKNOWN"
-export function operationType (query : string) : QueryType {
+export async function operationType (query : string) : Promise<QueryType> {
     if(!query || typeof query !== "string"){
         return "UNKNOWN"
     }
-const formatQuery = query.trim().toUpperCase().split(/\s+/)[0] || ""
-if(formatQuery === "SELECT"){
-    return 'SELECT'
+try{
+    const ast = (await parse(query)) as any
+    if (!ast || !ast.stmts || ast.stmts.length === 0) {
+        return 'UNKNOWN';
+    }
+    if(ast.stmts.length > 1){
+        return 'UNKNOWN'
+    }
+    const stmt = ast.stmts[0].stmt;
+    if(!stmt){
+        return 'UNKNOWN'
+    }
+    if(stmt.SelectStmt){
+        if(stmt.SelectStmt.withClause){
+            return 'UPDATE'
+        }
+        return 'SELECT'
+    }
+    if(stmt.InsertStmt){
+        return 'INSERT'
+    }
+    if(stmt.UpdateStmt){
+        return 'UPDATE'
+    }
+    if(stmt.DeleteStmt){
+        return 'DELETE'
+    }
+    if(stmt.DropStmt || stmt.AlterTableStmt){
+        return 'DDL'
+    }
 }
-if(formatQuery === "INSERT"){
-    return 'INSERT'
+catch(error){
+    console.error("PARSER ERROR:", error)
+    return 'UNKNOWN'
 }
-if(formatQuery === "UPDATE"){
-    return 'UPDATE'
-}
-if(formatQuery === "DELETE"){
-    return 'DELETE'
-}
-const DDLQueries = ["CREATE", "ALTER", "DROP", "TRUNCATE"]
-if(DDLQueries.includes(formatQuery)){
-    return "DDL"
-}
-return "UNKNOWN"
+return 'UNKNOWN'
 }

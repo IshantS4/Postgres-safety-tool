@@ -1,121 +1,173 @@
-import 'dotenv/config'; // .env file ko read karne ke liye[cite: 18]
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import { targetPool, controlPool } from './db.js'; // TS + Node (ESM) mein .js lagana padta hai imports mein
+import { targetPool, controlPool } from './db.js';
 import { operationType } from './classifier.js';
-import { error } from 'node:console';
-import { get } from 'node:http';
-import { queryObjects } from 'node:v8';
-import { Query } from 'pg';
 
-const app = express();
+const agentApp = express();
+agentApp.use(express.json());
 
-// SECURITY MIDDLEWARES
-app.use(cors()); // Frontend ko allow karne ke liye[cite: 18]
-app.use(express.json()); // JSON chunks parse karne ke liye[cite: 14, 18]
+const adminApp = express();
+adminApp.use(cors());
+adminApp.use(express.json());
 
-// HEALTH CHECK ROUTE
-app.get('/api/health', (req, res) => {
-  res.status(200).json({ status: "AI Postgres Safety Tool API is running!" });
-});
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'secret-dashboard-key';
 
-// ENGINE START
-const PORT = process.env.PORT || 8000;
-
-app.listen(PORT, () => {
-  console.log(`🚀 Secure Express Engine running on port ${PORT}`);
-});
-
-app.post('/api/query', async(req,res) => {
-    try{
-        const {query} = req.body
-    const type = operationType(query)
-    if(type === "SELECT"){
-        const result = await targetPool.query(query)
-        return res.json({ success: true, type, rows: result.rows })
-    }
-
-    //IF THE QUERY IS HAZARDOUS LIKE UPDATE,DELETE
-
-    const client = await targetPool.connect()
-    await client.query('BEGIN')
-    const result = await client.query(query)
-    const blastRadius = result.rowCount
-    await client.query('ROLLBACK')
-    client.release()
-
-    if(type === "UPDATE" && blastRadius <= 2 || type === "DELETE" && blastRadius === 1){
-       const autoExec =  await targetPool.query(query)
-      await controlPool.query(
-        `INSERT INTO audit_logs(query,query_type,status,affected_rows) VALUES ($1,$2,$3,$4)`,[query,type,'AUTO_EXECUTED',blastRadius]
-    )
-    return res.json({ 
-            success: true, 
-            message: "Auto-approved and executed by Rules Engine (Low Risk)", 
-            rows: autoExec.rows 
-        })
-    }
-    else{
-        await controlPool.query(
-        `INSERT INTO audit_logs(query,query_type,status,affected_rows) VALUES ($1,$2,$3,$4)`,[query,type,'PENDING',blastRadius]
-    )
-
-    return res.status(403).json({ success: false, type, error: "Blocked by Safety Guard! Destructive operations require approval." })
-    }
-   
-    }
-    catch(error){
-        console.error("Error Occured !",error)
-        res.status(500).json({error : "Could not perform the query"})
-    }
-})
-
-//SELECTING A QUERY FROM CONTROLPOOL THEN EXECUTING IT TO TARGETPOOL THEN UPDATING CONTROLPOOL STATUS TO "EXECUTED"
-app.post('/api/approve/:id', async(req,res) => {
-    try{
-        const {id} = req.params
-     const logResults = await controlPool.query(
-            `SELECT * FROM audit_logs WHERE id = $1 AND status = 'PENDING'`,[id]
-        )
-        if(logResults.rows.length === 0){
-          return res.status(404).json({success: false, error: "Pending audit log not found or already processed."})
+agentApp.post('/api/query', async (req, res) => {
+    try {
+        const { query } = req.body;
+        const type = await operationType(query);
+        
+        if(type === "UNKNOWN"){
+            return res.status(400).json({message : "Invalid or strictly blocked query structure detected."})
         }
-        const targetQuery = logResults.rows[0].query
-        const executeQuery = await targetPool.query(targetQuery)
-        await controlPool.query(
-            `UPDATE audit_logs SET status = 'EXECUTED' WHERE id = $1`,[id]
-        )
-        return res.json({success : true,
-                        message : "Query approved and executed successfully on Target DB!",
-                        ApprovedQuery : targetQuery,
-                        result: executeQuery.rows || "Query executed (No rows returned)"
-    })
-    }
-    catch(error){
-        console.error("Error during query approval/execution",error)
-        res.status(500).json({success : false,
-                            message : "Could not execute the Approved Query"
-        })
-    }
-})
+        if (type === "SELECT") {
+            const result = await targetPool.query(query);
+            return res.json({ success: true, type, rows: result.rows });
+        }
 
-//READING THE TABLE DATA
+        const client = await targetPool.connect();
+        let blastRadius = 0;
+        
+        try {
+            await client.query('BEGIN');
+            const result = await client.query(query);
+            blastRadius = result.rowCount || 0;
+            await client.query('ROLLBACK');
+        } catch (dbError) {
+            await client.query('ROLLBACK');
+            throw dbError; 
+        } finally {
+            client.release(); 
+        }
 
-app.get('/api/audit-logs', async(req,res) => {
-   try{
-     const getPendingData = await controlPool.query(
-        `SELECT * FROM audit_logs ORDER BY created_at DESC`
+        if ((type === "UPDATE" && blastRadius <= 2) || (type === "DELETE" && blastRadius === 1)) {
+            const autoExec = await targetPool.query(query);
+            await controlPool.query(
+                `INSERT INTO audit_logs(query, query_type, status, affected_rows) VALUES ($1, $2, $3, $4)`,
+                [query, type, 'AUTO_EXECUTED', blastRadius]
+            );
+            return res.json({ 
+                success: true, 
+                message: "Auto-approved and executed by Rules Engine (Low Risk)", 
+                rows: autoExec.rows 
+            });
+        } else {
+            await controlPool.query(
+                `INSERT INTO audit_logs(query, query_type, status, affected_rows) VALUES ($1, $2, $3, $4)`,
+                [query, type, 'PENDING', blastRadius]
+            );
+            return res.status(403).json({ 
+                success: false, 
+                type, 
+                error: "Blocked by Safety Guard! Destructive operations require approval." 
+            });
+        }
+    } catch (error) {
+        console.error("Error occurred in agent query:", error);
+        res.status(500).json({ error: "Could not perform the query" });
+    }
+});
+
+adminApp.use((req, res, next) => {
+    const token = req.headers['x-admin-token'];
+   
+    if (token !== ADMIN_SECRET) {
+        return res.status(401).json({ success: false, error: "Unauthorized. Admin access only." });
+    }
+    next();
+});
+
+adminApp.get('/api/audit-logs', async (req, res) => {
+    try {
+        const getPendingData = await controlPool.query(`SELECT * FROM audit_logs ORDER BY created_at DESC`);
+       
+        return res.json({ 
+            success: true, 
+            auditLogs: getPendingData.rows 
+        });
+    } catch (error) {
+        console.error("Error accessing audit_logs:", error);
+        res.status(500).json({ success: false, message: "Could not fetch audit logs" });
+    }
+});
+
+adminApp.post('/api/approve/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const logResults = await controlPool.query(
+            `SELECT * FROM audit_logs WHERE id = $1 AND status = 'PENDING'`, [id]
+        );
+        
+        if (logResults.rows.length === 0) {
+            return res.status(404).json({ success: false, error: "Pending audit log not found or already processed." });
+        }
+        
+        const originalBlastRadius = logResults.rows[0].affected_rows;
+        const targetQuery = logResults.rows[0].query;
+        
+        const client = await targetPool.connect();
+        
+        try {
+            await client.query('BEGIN');
+            const executeQuery = await client.query(targetQuery);
+            
+            if (executeQuery.rowCount !== originalBlastRadius) {
+                await client.query('ROLLBACK');
+                await controlPool.query(
+                    `UPDATE audit_logs SET status = 'REJECTED_STATE_CHANGE' WHERE id = $1`, [id]
+                );
+                return res.status(409).json({ success: false, message: 'Blast radius mismatch! Database state changed.' });
+            } else {
+                await client.query('COMMIT'); 
+                
+                await controlPool.query(
+                    `UPDATE audit_logs SET status = 'EXECUTED' WHERE id = $1`, [id]
+                );
+                return res.json({ 
+                    success: true,
+                    message: "Query approved and executed successfully on Target DB!",
+                    ApprovedQuery: targetQuery,
+                    result: executeQuery.rows || "Query executed (No rows returned)"
+                });
+            }
+        } catch (dbError) {
+            await client.query('ROLLBACK');
+            throw dbError; 
+        } finally {
+            client.release();
+        }
+
+    } catch (error) {
+
+        console.error("Error during execution:", error);
+        res.status(500).json({ success: false, message: "Could not execute the Approved Query" });
+    }
+});
+
+adminApp.post('/api/reject/:id',async(req,res) => {
+const {id} = req.params
+try{
+    const result = await controlPool.query(
+        `UPDATE audit_logs SET status = 'REJECTED' WHERE id = $1 RETURNING *`,[id]
     )
-    if(getPendingData.rows.length === 0){
-        return res.status(404).json({success: false, error: "Audit log not found."})
+    if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, error: "Audit log not found." });
+        }
+        res.json({success : true, message : "Query rejected successfully.", rejectedQuery : result.rows[0].query})
+}
+catch (error) {
+        res.status(500).json({ success: false, error: "Could not reject the query"});
     }
-    return res.json({success : true,
-                    message : "THE QUERIES CURRENTLY BLOCKED BY THE PROTECTOR.",
-                    auditLogs : getPendingData.rows
-    })
-   }
-   catch(error){
-    console.error("Error during accessing the blocked queries data from audit_logs")
-    res.status(500).json({success : false, message : "Could not show the blocked data"})
-   }
 })
+
+const AGENT_PORT = process.env.PORT || 8000;
+const ADMIN_PORT = process.env.ADMIN_PORT || 8001;
+
+agentApp.listen(AGENT_PORT, () => {
+    console.log(`🤖 Agent Plane running on port ${AGENT_PORT}`);
+});
+
+adminApp.listen(ADMIN_PORT, () => {
+    console.log(`🛡️  Admin Control Plane running on port ${ADMIN_PORT}`);
+});
