@@ -192,10 +192,10 @@ catch (error) {
 const AGENT_PORT = process.env.PORT || 8000;
 const ADMIN_PORT = process.env.ADMIN_PORT || 8001;
 
-agentApp.listen(AGENT_PORT, () => {
+agentApp.listen(Number(AGENT_PORT), () => {
     console.log(`🤖 Agent Plane running on port ${AGENT_PORT}`);
 });
 
-adminApp.listen(ADMIN_PORT, () => {
-    console.log(`🛡️  Admin Control Plane running on port ${ADMIN_PORT}`);
+adminApp.listen(Number(ADMIN_PORT), '127.0.0.1', () => {
+    console.log(`🛡️  Admin Control Plane running on http://127.0.0.1:${ADMIN_PORT}`);
 });
