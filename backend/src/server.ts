@@ -31,7 +31,7 @@ agentApp.post('/api/query', async (req, res) => {
         const { query } = req.body;
         const type = await operationType(query);
         
-        if(type === "UNKNOWN"){
+        if(type === "UNKNOWN" || type === "WRITE_CTE"){
             await controlPool.query(
                 `INSERT INTO audit_logs(query, query_type, status, affected_rows) VALUES ($1, $2, $3, $4)`,
         [query, 'UNKNOWN', 'REJECTED', null]

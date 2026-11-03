@@ -25,5 +25,7 @@ controlPool.on('error', (err, client) => {
     console.error('Unexpected error on idle Control Pool client', err);
 });
 
-targetPool.query('SELECT NOW()').then(() => console.log("✅ Target DB Connected!"));
-controlPool.query('SELECT NOW()').then(() => console.log("✅ Control DB Connected!"));
+targetPool.query('SELECT NOW()').then(() => console.log("✅ Target DB Connected!"))
+.catch((err) => console.error('❌ Target DB connection failed on startup:', err.message));
+controlPool.query('SELECT NOW()').then(() => console.log("✅ Control DB Connected!"))
+.catch((err) => console.error('❌ Control DB connection failed on startup:', err.message));
