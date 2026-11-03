@@ -1,5 +1,4 @@
 import { parse } from "pgsql-parser" 
-import { text } from "stream/consumers";
 export type QueryType = "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "DDL" | "UNKNOWN" | "WRITE_CTE"
 export async function operationType (query : string) : Promise<QueryType> {
     if(!query || typeof query !== "string"){
