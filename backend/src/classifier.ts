@@ -47,7 +47,6 @@ try{
     return 'UNKNOWN'
 }
 catch(error){
-    console.error("PARSER ERROR:", error)
     return 'UNKNOWN'
 }
 }
