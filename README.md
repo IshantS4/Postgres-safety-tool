@@ -55,7 +55,7 @@ When an admin approves a queued statement, it runs again inside a transaction. I
 ### Requirements
 
 - Node.js 20 or newer
-- Docker (for the two Postgres containers)
+- PostgreSQL 15 or newer running locally (default port 5432)
 
 ### 1. Install
 
@@ -77,15 +77,18 @@ Open `.env` and replace every `change-me` value. Generate strong secrets with:
 node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
 ```
 
-The same `.env` is read by both Docker Compose and the Node app, so `POSTGRES_PASSWORD` must match the admin passwords for the two databases.
+Use your local `postgres` password for `TARGET_DB_ADMIN_PASSWORD` and `CONTROL_DB_PASSWORD`. Pick a new password for `AGENT_DB_PASSWORD` and `TARGET_DB_PASSWORD` (they must be the same value).
 
-### 3. Start the databases
+### 3. Create the two databases
+
+In your local PostgreSQL, create two empty databases:
 
 ```bash
-docker compose up -d
+psql -U postgres -c "CREATE DATABASE target_db;"
+psql -U postgres -c "CREATE DATABASE control_db;"
 ```
 
-Wait about 10 seconds for Postgres to finish starting. The target database is on port `5434` and the control database on `5433`.
+(Or create them in pgAdmin.) Both databases live on the same PostgreSQL server.
 
 ### 4. Create the tables and the restricted user
 
