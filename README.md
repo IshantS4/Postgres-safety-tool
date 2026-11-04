@@ -23,7 +23,7 @@ AI coding agents have deleted production databases and their backups in seconds.
           ┌──────────────────────┴───────────────────────┐
           ▼                                              ▼
    Target DB (the agent's data)               Control DB (audit log, approvals)
-   used by the restricted `ai_agent` user     never reachable by the agent
+   used by the restricted `ai_agent` user     the agent has no permissions on it
 
                  ┌────────────────────────────────────────────┐
   Human ───────► │ Admin plane  :8001 (127.0.0.1 only)        │
@@ -71,13 +71,17 @@ npm install
 cp .env.example .env
 ```
 
+(On Windows PowerShell: `copy .env.example .env`.)
+
 Open `.env` and replace every `change-me` value. Generate strong secrets with:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
 ```
 
-Use your local `postgres` password for `TARGET_DB_ADMIN_PASSWORD` and `CONTROL_DB_PASSWORD`. Pick a new password for `AGENT_DB_PASSWORD` and `TARGET_DB_PASSWORD` (they must be the same value).
+- `ADMIN_SECRET`: any random string of 16 or more characters.
+- `TARGET_DB_ADMIN_PASSWORD` and `CONTROL_DB_PASSWORD`: your local `postgres` password (the same value on both lines).
+- `AGENT_DB_PASSWORD` and `TARGET_DB_PASSWORD`: a new password of your choice (the same value on both lines).
 
 ### 3. Create the two databases
 
@@ -111,6 +115,14 @@ npm run dev
 You should see the agent plane on port 8000 and the admin plane on `127.0.0.1:8001`.
 
 ### 6. Run the dashboard
+
+Create `frontend/.env` with the same admin token the backend uses:
+
+```
+VITE_ADMIN_SECRET=<the same value as ADMIN_SECRET>
+```
+
+Then:
 
 ```bash
 cd ../frontend
@@ -183,16 +195,15 @@ Database variables:
 
 | Variable | Used by | Purpose |
 |---|---|---|
-| `POSTGRES_PASSWORD` | Docker Compose | Password of the `admin` user in both containers |
-| `TARGET_DB_ADMIN_USER` / `TARGET_DB_ADMIN_PASSWORD` | `seed.ts`, `setup-user.ts` | Admin login for setup scripts (`admin` with the Docker setup) |
+| `TARGET_DB_ADMIN_USER` / `TARGET_DB_ADMIN_PASSWORD` | `seed.ts`, `setup-user.ts` | Admin login for the setup scripts (usually `postgres`) |
 | `AGENT_DB_PASSWORD` | `setup-user.ts` | Password given to the `ai_agent` user |
 | `TARGET_DB_USER` / `TARGET_DB_PASSWORD` | the server | Must be `ai_agent` and its password |
-| `CONTROL_DB_USER` / `CONTROL_DB_PASSWORD` | the server | Admin login for the control database |
-| `*_HOST`, `*_PORT`, `*_NAME` | everything | Target on port `5434`, control on `5433` with the Docker setup |
+| `CONTROL_DB_USER` / `CONTROL_DB_PASSWORD` | the server | Login for the control database (usually `postgres`) |
+| `*_HOST`, `*_PORT`, `*_NAME` | everything | Both databases on `localhost:5432` by default |
 
 ## Tech stack
 
-TypeScript, Node.js, Express, PostgreSQL (`pg`, no ORM), `pgsql-parser`, React, Vite, Tailwind CSS, Docker, Vitest.
+TypeScript, Node.js, Express, PostgreSQL (`pg`, no ORM), `pgsql-parser`, React, Vite, Tailwind CSS, Vitest.
 
 ## Status
 
@@ -225,6 +236,7 @@ TypeScript, Node.js, Express, PostgreSQL (`pg`, no ORM), `pgsql-parser`, React, 
 
 - Never commit `.env`. Only `.env.example` belongs in the repository.
 - The admin port is bound to `127.0.0.1`. Keep the admin token away from the agent.
+- The two databases share one PostgreSQL server in this setup. The `ai_agent` user has no permissions on the control tables, but for stronger isolation run the control database on a separate server.
 - This is a prototype. Do not put it in front of a database you cannot afford to lose.
 
 ## License
