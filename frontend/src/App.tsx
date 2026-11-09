@@ -5,7 +5,7 @@ interface AuditLog {
   query: string;
   query_type: string;
   status: string;
-  affected_rows: number;
+  affected_rows: number | null;
   created_at: string;
 }
 
@@ -168,7 +168,13 @@ export default function App() {
                         </span>
                       </td>
                       <td className="p-4 font-mono text-xs text-gray-300 max-w-md whitespace-pre-wrap break-all">{log.query}</td>
-                      <td className="p-4 font-mono text-xs text-gray-300">{log.affected_rows !== null ? `${log.affected_rows} rows` : 'DDL (Schema)'}</td>
+                      <td className="p-4 font-mono text-xs text-gray-300">
+                       {log.affected_rows !== null
+                       ? `${log.affected_rows} rows`
+                       : log.query_type === 'DDL'
+                        ? 'DDL (Schema)'
+                        : 'n/a'}
+                        </td>
                       <td className="p-4 text-xs">
                         
                         <span className={`px-2 py-1 rounded-full font-medium text-[10px] ${getStatusColor(log.status)}`}>

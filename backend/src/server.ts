@@ -53,6 +53,10 @@ agentApp.post('/api/query', async (req, res) => {
             }
             catch(dbError){
                 await client.query('ROLLBACK');
+                await controlPool.query(
+                    `INSERT INTO audit_logs(query, query_type, status, affected_rows) VALUES ($1, $2, $3, $4)`,
+            [query, 'SELECT', 'FAILED_EXECUTION', null]
+                )
                 console.error("SELECT execution error:", dbError);
                  return res.status(403).json({ 
                 success: false, 
@@ -95,8 +99,13 @@ agentApp.post('/api/query', async (req, res) => {
                 error: "Blocked by Safety Guard! Destructive operations require approval." 
             });
         }
-        } catch (dbError) {
+        } 
+            catch (dbError) {
             await client.query('ROLLBACK');
+            await controlPool.query(
+                `INSERT INTO audit_logs(query, query_type, status, affected_rows) VALUES ($1, $2, $3, $4)`,
+                [query, type, 'FAILED_EXECUTION', null]
+            );
             throw dbError; 
         } finally {
             client.release(); 
