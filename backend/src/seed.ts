@@ -1,7 +1,6 @@
-import 'dotenv/config'; // Make sure env variables load first
+import 'dotenv/config'; 
 import pg from 'pg';
 
-// Create a standalone pool just for seeding, using ADMIN credentials
 const seedPool = new pg.Pool({
     user: process.env.TARGET_DB_ADMIN_USER || 'postgres',
     password: process.env.TARGET_DB_ADMIN_PASSWORD,

@@ -45,6 +45,10 @@ agentApp.post('/api/query', async (req, res) => {
             await client.query("SET LOCAL statement_timeout = '5000'");
             const result = await client.query(query);
             await client.query('ROLLBACK');
+            await controlPool.query(
+            `INSERT INTO audit_logs(query, query_type, status, affected_rows) VALUES ($1, $2, $3, $4)`,
+            [query, 'SELECT', 'AUTO_EXECUTED', result.rows.length]
+);
             return res.json({success : true, type, rows : result.rows});
             }
             catch(dbError){
